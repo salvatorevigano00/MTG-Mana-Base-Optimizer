@@ -15,9 +15,17 @@ class CardDatabase:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 for row in DictReader(f):
-                    eng, ita = row['Nome_ENG'].strip().lower(), row['Nome_ITA'].strip().lower()
+                    eng = row['Nome_ENG'].strip().lower()
+                    ita = row['Nome_ITA'].strip().lower()
                     self.db[eng] = row
                     if ita: self.db[ita] = row
+                    
+                    if " // " in eng:
+                        primary_eng = eng.split(" // ")[0]
+                        self.db[primary_eng] = row
+                    if ita and " // " in ita:
+                        primary_ita = ita.split(" // ")[0]
+                        self.db[primary_ita] = row
         except Exception: pass
 
     def search_card(self, name):
@@ -99,7 +107,7 @@ class MonteCarloSimulator:
         dc = sum(l['copies'] for l in self.analyzer.lands)
         req = self.analyzer.target_lands - dc
         
-        if req < 0: return "You've added more lands than the 60-card limit allows!"
+        if req < 0: return "You've added more lands than the 60-card limit allows. Please remove some lands or adjust your target land count."
         if self.analyzer.target_lands < 15: return "Warning: Running fewer than 15 lands is mathematically unplayable in Standard."
         
         pips = {'Plains': sum(s['w']*s['copies'] for s in self.analyzer.spells), 'Island': sum(s['u']*s['copies'] for s in self.analyzer.spells), 'Swamp': sum(s['b']*s['copies'] for s in self.analyzer.spells), 'Mountain': sum(s['r']*s['copies'] for s in self.analyzer.spells), 'Forest': sum(s['g']*s['copies'] for s in self.analyzer.spells)}
@@ -147,7 +155,7 @@ class AppCLI:
         print("+" + "-"*56 + "+")
         print("|" + "MTG MANA BASE OPTIMIZER".center(56) + "|")
         print("+" + "-"*56 + "+")
-        print(f"| Deck: {spells_count} Spells | {lands_count} Dual/Special Lands".ljust(57) + "|")
+        print(f"| Deck: {spells_count} Spells | {lands_count} Dual/Special/Utility Lands".ljust(57) + "|")
         print(f"| Archetype: {self.analyzer.archetype} (Target: {self.analyzer.target_lands} Lands)".ljust(57) + "|")
         print("+" + "-"*56 + "+")
         print("| 1. Add a card manually                                 |")
@@ -179,14 +187,14 @@ class AppCLI:
                 self.manage_deck()
             elif c == '4':
                 self.analyzer.analyze()
-                print("\nArchetype analyzed and target lands locked to 60-card limit!")
+                print("\nArchetype analyzed and target lands locked to 60-card limit.")
                 time.sleep(1.5)
             elif c == '5':
                 self.simulate()
             elif c == '6':
                 self.analyzer.deck = []
                 self.analyzer.analyze()
-                print("\nDeck cleared successfully! Ready for a new brew.")
+                print("\nDeck cleared successfully. Ready for a new brew.")
                 time.sleep(1.5)
             elif c == '7':
                 print("\nThanks for using the MTG Mana Base Optimizer.")
@@ -218,9 +226,10 @@ class AppCLI:
             time.sleep(2)
             return
 
-        basics = {"plains", "island", "swamp", "mountain", "forest", "pianura", "isola", "palude", "montagna", "foresta"}
         is_sideboard = False
         cards_added = 0
+        lands_stripped = 0
+        not_found = []
         
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -236,20 +245,37 @@ class AppCLI:
 
                     parts = line.split(' (')[0].strip().split(' ', 1)
                     if len(parts) == 2 and parts[0].isdigit():
-                        if parts[1].lower() not in basics:
-                            if self.analyzer.add_card(parts[1], int(parts[0])):
-                                cards_added += 1
+                        qty = int(parts[0])
+                        name = parts[1]
+                        card_info = self.analyzer.db.search_card(name)
+                        
+                        if card_info:
+                            if "Land" in card_info['Tipo_Pulito']:
+                                lands_stripped += qty
+                                continue
+                            if self.analyzer.add_card(name, qty):
+                                cards_added += qty
+                        else:
+                            not_found.append(f"{qty}x {name}")
             
             if cards_added == 0:
-                print("\nNo valid mainboard cards found in the file.")
+                print("\nNo valid spell cards found in the file.")
             else:
                 self.analyzer.analyze()
-                print(f"\nSuccessfully imported mainboard cards from {filepath}.")
-                print(f"Archetype set to {self.analyzer.archetype}!")
+                print(f"\nSuccessfully imported {cards_added} pure spells from {filepath}.")
+                print(f"Stripped {lands_stripped} lands from the original list.")
+                print(f"Archetype set to {self.analyzer.archetype}. Target lands adjusted to {self.analyzer.target_lands}.")
+            
+            if not_found:
+                print("\nWARNING: The following cards were NOT found in the database:")
+                for nf in not_found:
+                    print(f" - {nf}")
+                print("(Check spelling or verify if the set is included in MTGJSON Standard)")
             
         except Exception: 
             print("\nSomething went wrong while reading the file.")
-        time.sleep(2)
+            
+        input("\nPress Enter to continue...")
 
     def manage_deck(self):
         while True:
@@ -296,7 +322,7 @@ class AppCLI:
             try:
                 with open(final_name, 'w', encoding='utf-8') as f:
                     json.dump(results, f, indent=4)
-                print(f"\nSuccess! Results exported to {final_name}")
+                print(f"\nResults exported to {final_name}")
             except Exception as e:
                 print(f"\nFailed to export: {e}")
 
@@ -317,7 +343,7 @@ class AppCLI:
         print(f"\nOptimal Mana Base Results")
         print("-" * 25)
         print(f"Target Total Lands (for 60 cards): {self.analyzer.target_lands}")
-        print(f"Dual/Special Lands already added: {r['duals_added']}\n")
+        print(f"Dual/Special/Utility Lands manually added: {r['duals_added']}\n")
         
         print("Basic lands to add:")
         for k, v in r['bases'].items():
